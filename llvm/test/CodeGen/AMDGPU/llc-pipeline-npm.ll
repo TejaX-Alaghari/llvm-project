@@ -90,10 +90,11 @@
 ; GCN-O0-NEXT: remove-loads-into-fake-uses
 ; GCN-O0-NEXT: live-debug-values
 ; GCN-O0-NEXT: machine-sanmd
-; GCN-O0-NEXT: amdgpu-preload-kern-arg-prolog
 ; GCN-O0-NEXT: stack-frame-layout
-; GCN-O0-NEXT: verify)
+; GCN-O0-NEXT: verify
+; GCN-O0-NEXT: asm-printer)
 ; GCN-O0-NEXT: free-machine-function))
+; GCN-O0-NEXT: asm-printer-finalize
 
 ; GCN-O2: require<MachineModuleAnalysis>
 ; GCN-O2-NEXT: require<profile-summary>
@@ -225,7 +226,6 @@
 ; GCN-O2-NEXT: amdgpu-rewrite-agpr-copy-mfma
 ; GCN-O2-NEXT: virt-reg-rewriter
 ; GCN-O2-NEXT: amdgpu-mark-last-scratch-load
-; GCN-O2-NEXT: stack-slot-coloring
 ; GCN-O2-NEXT: machine-cp
 ; GCN-O2-NEXT: machinelicm
 ; GCN-O2-NEXT: si-fix-vgpr-copies
@@ -235,9 +235,9 @@
 ; GCN-O2-NEXT: postra-machine-sink
 ; GCN-O2-NEXT: shrink-wrap
 ; GCN-O2-NEXT: prolog-epilog
-; GCN-O2-NEXT: machine-latecleanup
 ; GCN-O2-NEXT: branch-folder
 ; GCN-O2-NEXT: tailduplication
+; GCN-O2-NEXT: machine-latecleanup
 ; GCN-O2-NEXT: machine-cp
 ; GCN-O2-NEXT: post-ra-pseudos
 ; GCN-O2-NEXT: si-shrink-instructions
@@ -262,10 +262,11 @@
 ; GCN-O2-NEXT: remove-loads-into-fake-uses
 ; GCN-O2-NEXT: live-debug-values
 ; GCN-O2-NEXT: machine-sanmd
-; GCN-O2-NEXT: amdgpu-preload-kern-arg-prolog
 ; GCN-O2-NEXT: stack-frame-layout
-; GCN-O2-NEXT: verify)
+; GCN-O2-NEXT: verify
+; GCN-O2-NEXT: asm-printer)
 ; GCN-O2-NEXT: free-machine-function))
+; GCN-O2-NEXT: asm-printer-finalize
 
 ; GCN-O3: require<MachineModuleAnalysis>
 ; GCN-O3-NEXT: require<profile-summary>
@@ -397,7 +398,6 @@
 ; GCN-O3-NEXT: amdgpu-rewrite-agpr-copy-mfma
 ; GCN-O3-NEXT: virt-reg-rewriter
 ; GCN-O3-NEXT: amdgpu-mark-last-scratch-load
-; GCN-O3-NEXT: stack-slot-coloring
 ; GCN-O3-NEXT: machine-cp
 ; GCN-O3-NEXT: machinelicm
 ; GCN-O3-NEXT: si-fix-vgpr-copies
@@ -407,9 +407,9 @@
 ; GCN-O3-NEXT: postra-machine-sink
 ; GCN-O3-NEXT: shrink-wrap
 ; GCN-O3-NEXT: prolog-epilog
-; GCN-O3-NEXT: machine-latecleanup
 ; GCN-O3-NEXT: branch-folder
 ; GCN-O3-NEXT: tailduplication
+; GCN-O3-NEXT: machine-latecleanup
 ; GCN-O3-NEXT: machine-cp
 ; GCN-O3-NEXT: post-ra-pseudos
 ; GCN-O3-NEXT: si-shrink-instructions
@@ -434,10 +434,11 @@
 ; GCN-O3-NEXT: remove-loads-into-fake-uses
 ; GCN-O3-NEXT: live-debug-values
 ; GCN-O3-NEXT: machine-sanmd
-; GCN-O3-NEXT: amdgpu-preload-kern-arg-prolog
 ; GCN-O3-NEXT: stack-frame-layout
-; GCN-O3-NEXT: verify)
+; GCN-O3-NEXT: verify
+; GCN-O3-NEXT: asm-printer)
 ; GCN-O3-NEXT: free-machine-function))
+; GCN-O3-NEXT: asm-printer-finalize
 
 define void @empty() {
   ret void

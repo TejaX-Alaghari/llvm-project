@@ -19,6 +19,7 @@
 #include "AMDGPUAliasAnalysis.h"
 #include "AMDGPUArgumentUsageInfo.h"
 #include "AMDGPUBarrierLatency.h"
+#include "AMDGPUAsmPrinter.h"
 #include "AMDGPUCtorDtorLowering.h"
 #include "AMDGPUExportClustering.h"
 #include "AMDGPUExportKernelRuntimeHandles.h"
@@ -1228,10 +1229,10 @@ GCNTargetMachine::getTargetTransformInfo(const Function &F) const {
 
 Error GCNTargetMachine::buildCodeGenPipeline(
     ModulePassManager &MPM, raw_pwrite_stream &Out, raw_pwrite_stream *DwoOut,
-    CodeGenFileType FileType, const CGPassBuilderOption &Opts,
+    CodeGenFileType FileType, const CGPassBuilderOption &Opts, MCContext &Ctx,
     PassInstrumentationCallbacks *PIC) {
   AMDGPUCodeGenPassBuilder CGPB(*this, Opts, PIC);
-  return CGPB.buildPipeline(MPM, Out, DwoOut, FileType);
+  return CGPB.buildPipeline(MPM, Out, DwoOut, FileType, Ctx);
 }
 
 ScheduleDAGInstrs *
@@ -2184,8 +2185,6 @@ void AMDGPUCodeGenPassBuilder::addIRPasses(PassManagerWrapper &PMW) const {
   if (isPassEnabled(EnableImageIntrinsicOptimizer))
     addFunctionPass(AMDGPUImageIntrinsicOptimizerPass(TM), PMW);
 
-  if (EnableUniformIntrinsicCombine)
-    addFunctionPass(AMDGPUUniformIntrinsicCombinePass(), PMW);
   // This can be disabled by passing ::Disable here or on the command line
   // with --expand-variadics-override=disable.
   flushFPMsToMPM(PMW);
@@ -2300,6 +2299,8 @@ void AMDGPUCodeGenPassBuilder::addPreISel(PassManagerWrapper &PMW) const {
     addFunctionPass(AMDGPULateCodeGenPreparePass(TM), PMW);
   }
 
+  addFunctionPass(AMDGPUConditionalDiscardPass(), PMW);
+
   // Merge divergent exit nodes. StructurizeCFG won't recognize the multi-exit
   // regions formed by them.
 
@@ -2360,22 +2361,22 @@ void AMDGPUCodeGenPassBuilder::addPreRewrite(PassManagerWrapper &PMW) const {
 }
 
 void AMDGPUCodeGenPassBuilder::addMachineSSAOptimization(
-    PassManagerWrapper &PMW) const {
-  Base::addMachineSSAOptimization(PMW);
+    AddMachinePass &addPass) const {
+  Base::addMachineSSAOptimization(addPass);
 
-  addMachineFunctionPass(SIFoldOperandsPass(), PMW);
+  addPass(SIFoldOperandsPass());
   if (EnableDPPCombine) {
-    addMachineFunctionPass(GCNDPPCombinePass(), PMW);
+    addPass(GCNDPPCombinePass());
   }
-  addMachineFunctionPass(SILoadStoreOptimizerPass(), PMW);
+  addPass(SILoadStoreOptimizerPass());
   if (isPassEnabled(EnableSDWAPeephole)) {
-    addMachineFunctionPass(SIPeepholeSDWAPass(), PMW);
-    addMachineFunctionPass(EarlyMachineLICMPass(), PMW);
-    addMachineFunctionPass(MachineCSEPass(), PMW);
-    addMachineFunctionPass(SIFoldOperandsPass(), PMW);
+    addPass(SIPeepholeSDWAPass());
+    addPass(EarlyMachineLICMPass());
+    addPass(MachineCSEPass());
+    addPass(SIFoldOperandsPass());
   }
-  addMachineFunctionPass(DeadMachineInstructionElimPass(), PMW);
-  addMachineFunctionPass(SIShrinkInstructionsPass(), PMW);
+  addPass(DeadMachineInstructionElimPass());
+  addPass(SIShrinkInstructionsPass());
 }
 
 Error AMDGPUCodeGenPassBuilder::addFastRegAlloc(PassManagerWrapper &PMW) const {
@@ -2425,7 +2426,7 @@ Error AMDGPUCodeGenPassBuilder::addRegAssignmentFast(
   return Error::success();
 }
 
-Error AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
+void AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
     PassManagerWrapper &PMW) const {
   if (EnableDCEInRA)
     insertPass<DetectDeadLanesPass>(DeadMachineInstructionElimPass());
@@ -2461,7 +2462,7 @@ Error AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
   if (TM.getOptLevel() > CodeGenOptLevel::Less)
     insertPass<MachineSchedulerPass>(SIFormMemoryClausesPass());
 
-  return Base::addOptimizedRegAlloc(PMW);
+  Base::addOptimizedRegAlloc(PMW);
 }
 
 void AMDGPUCodeGenPassBuilder::addPreRegAlloc(PassManagerWrapper &PMW) const {

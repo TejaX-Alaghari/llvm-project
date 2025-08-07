@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
@@ -23,11 +24,14 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/AssignmentTrackingAnalysis.h"
 #include "llvm/CodeGen/BranchFoldingPass.h"
 #include "llvm/CodeGen/CodeGenPrepare.h"
 #include "llvm/CodeGen/DeadMachineInstructionElim.h"
 #include "llvm/CodeGen/DetectDeadLanes.h"
 #include "llvm/CodeGen/DwarfEHPrepare.h"
+#include "llvm/CodeGen/EarlyIfConversion.h"
 #include "llvm/CodeGen/ExpandIRInsts.h"
 #include "llvm/CodeGen/ExpandMemCmp.h"
 #include "llvm/CodeGen/ExpandPostRAPseudos.h"
@@ -43,6 +47,7 @@
 #include "llvm/CodeGen/InlineAsmPrepare.h"
 #include "llvm/CodeGen/InterleavedAccess.h"
 #include "llvm/CodeGen/InterleavedLoadCombine.h"
+#include "llvm/CodeGen/JMCInstrumenter.h"
 #include "llvm/CodeGen/LiveDebugValuesPass.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
@@ -74,6 +79,7 @@
 #include "llvm/CodeGen/RegAllocGreedyPass.h"
 #include "llvm/CodeGen/RegUsageInfoCollector.h"
 #include "llvm/CodeGen/RegUsageInfoPropagate.h"
+#include "llvm/CodeGen/RegisterUsageInfo.h"
 #include "llvm/CodeGen/RegisterCoalescerPass.h"
 #include "llvm/CodeGen/RegisterUsageInfo.h"
 #include "llvm/CodeGen/RemoveLoadsIntoFakeUses.h"
@@ -103,12 +109,17 @@
 #include "llvm/IRPrinter/IRPrintingPasses.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/CFGuard.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar/ConstantHoisting.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
@@ -122,7 +133,11 @@
 #include "llvm/Transforms/Utils/EntryExitInstrumenter.h"
 #include "llvm/Transforms/Utils/LowerInvoke.h"
 #include <cassert>
+#include <type_traits>
 #include <utility>
+
+// Defined in TargetPassConfig.cpp
+extern cl::opt<bool> PrintRegUsage;
 
 namespace llvm {
 
@@ -196,8 +211,8 @@ public:
   }
 
   Error buildPipeline(ModulePassManager &MPM, raw_pwrite_stream &Out,
-                      raw_pwrite_stream *DwoOut,
-                      CodeGenFileType FileType) const;
+                      raw_pwrite_stream *DwoOut, CodeGenFileType FileType,
+                      MCContext &Ctx) const;
 
   PassInstrumentationCallbacks *getPassInstrumentationCallbacks() const {
     return PIC;
@@ -294,6 +309,7 @@ protected:
   TargetMachineT &TM;
   CGPassBuilderOption Opt;
   PassInstrumentationCallbacks *PIC;
+  mutable IntrusiveRefCntPtr<AsmPrinter> PrinterImpl;
 
   template <typename TMC> TMC &getTM() const { return static_cast<TMC &>(TM); }
   CodeGenOptLevel getOptLevel() const { return TM.getOptLevel(); }
@@ -485,8 +501,6 @@ protected:
   /// Add standard basic block placement passes.
   void addBlockPlacement(PassManagerWrapper &PMW) const;
 
-  void addPostBBSections(PassManagerWrapper &PMW) const {}
-
   using CreateMCStreamer =
       std::function<Expected<std::unique_ptr<MCStreamer>>(MCContext &)>;
   void addAsmPrinter(PassManagerWrapper &PMW, CreateMCStreamer) const {
@@ -498,8 +512,7 @@ protected:
 
   /// createTargetRegisterAllocator - Create the register allocator pass for
   /// this target at the current optimization level.
-  void addTargetRegisterAllocator(PassManagerWrapper &PMW,
-                                  bool Optimized) const;
+  void addTargetRegisterAllocator(PassManagerWrapper &PMW, bool Optimized) const;
 
   /// addMachinePasses helper to create the target-selected or overriden
   /// regalloc pass.
@@ -562,7 +575,7 @@ private:
 template <typename Derived, typename TargetMachineT>
 Error CodeGenPassBuilder<Derived, TargetMachineT>::buildPipeline(
     ModulePassManager &MPM, raw_pwrite_stream &Out, raw_pwrite_stream *DwoOut,
-    CodeGenFileType FileType) const {
+    CodeGenFileType FileType, MCContext &Ctx) const {
   auto StartStopInfo = TargetPassConfig::getStartStopInfo(*PIC);
   if (!StartStopInfo)
     return StartStopInfo.takeError();
@@ -571,7 +584,17 @@ Error CodeGenPassBuilder<Derived, TargetMachineT>::buildPipeline(
   bool PrintAsm = TargetPassConfig::willCompleteCodeGenPipeline();
   bool PrintMIR = !PrintAsm && FileType != CodeGenFileType::Null;
 
+  Expected<std::unique_ptr<MCStreamer>> MCStreamerOrErr =
+      TM.createMCStreamer(Out, DwoOut, FileType, Ctx);
+  if (auto Err = MCStreamerOrErr.takeError())
+    return Err;
+  PrinterImpl =
+      TM.getTarget().createAsmPrinter(TM, std::move(*MCStreamerOrErr));
+
   PassManagerWrapper PMW(MPM);
+
+  if (PrintAsm)
+    addModulePass(AsmPrinterInitializePass(PrinterImpl), PMW, /*Force=*/true);
 
   addModulePass(RequireAnalysisPass<MachineModuleAnalysis, Module>(), PMW,
                 /*Force=*/true);
@@ -599,17 +622,18 @@ Error CodeGenPassBuilder<Derived, TargetMachineT>::buildPipeline(
   if (!Opt.DisableVerify)
     addMachineFunctionPass(MachineVerifierPass(), PMW);
 
-  if (PrintAsm) {
-    derived().addAsmPrinter(
-        PMW, [this, &Out, DwoOut, FileType](MCContext &Ctx) {
-          return this->TM.createMCStreamer(Out, DwoOut, FileType, Ctx);
-        });
-  }
+  if (PrintAsm)
+    addMachineFunctionPass(AsmPrinterPass(PrinterImpl), PMW, /*Force=*/true);
 
   if (PrintMIR)
     addMachineFunctionPass(PrintMIRPass(Out), PMW, /*Force=*/true);
 
   flushFPMsToMPM(PMW, /*FreeMachineFunctions=*/true);
+
+  if (PrintAsm)
+    addModulePass(AsmPrinterFinalizePass(PrinterImpl), PMW, /*Force=*/true);
+
+  PrinterImpl.reset();
 
   return verifyStartStop(*StartStopInfo);
 }
@@ -723,6 +747,10 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addIRPasses(
     addFunctionPass(ExpandMemCmpPass(TM), PMW);
   }
 
+  // This should be the last IR module pass.
+  // if (TargetPassConfig::willCompleteCodeGenPipeline())
+  //   addModulePass(AsmPrinterInitializePass(PrinterImpl), PMW);
+
   // Run GC lowering passes for builtin collectors
   // TODO: add a pass insertion point here
   addFunctionPass(GCLoweringPass(), PMW);
@@ -826,7 +854,7 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addCodeGenPrepare(
   if (getOptLevel() != CodeGenOptLevel::None && !Opt.DisableCGP)
     addFunctionPass(CodeGenPreparePass(TM), PMW);
   // TODO: Default ctor'd RewriteSymbolPass is no-op.
-  // addPass(RewriteSymbolPass());
+  // addFunctionPass(RewriteSymbolPass(), PMW);
 }
 
 /// Add common passes that perform LLVM IR to IR transforms in preparation for
@@ -1035,8 +1063,6 @@ Error CodeGenPassBuilder<Derived, TargetMachineT>::addMachinePasses(
   derived().addPreEmitPass(PMW);
 
   if (TM.Options.EnableIPRA) {
-    // Collect register usage information and produce a register mask of
-    // clobbered registers, to be used to optimize call sites.
     addMachineFunctionPass(RegUsageInfoCollectorPass(), PMW);
     // If -print-regusage is specified, print the collected register usage info.
     if (Opt.PrintRegUsage) {
@@ -1049,10 +1075,8 @@ Error CodeGenPassBuilder<Derived, TargetMachineT>::addMachinePasses(
 
   addMachineFunctionPass(RemoveLoadsIntoFakeUsesPass(), PMW);
   addMachineFunctionPass(StackMapLivenessPass(), PMW);
-  addMachineFunctionPass(
-      LiveDebugValuesPass(
-          getTM<TargetMachine>().Options.ShouldEmitDebugEntryValues()),
-      PMW);
+  addMachineFunctionPass(LiveDebugValuesPass(
+      getTM<TargetMachine>().Options.ShouldEmitDebugEntryValues()), PMW);
   addMachineFunctionPass(MachineSanitizerBinaryMetadataPass(), PMW);
 
   if (TM.Options.EnableMachineOutliner &&
@@ -1064,8 +1088,6 @@ Error CodeGenPassBuilder<Derived, TargetMachineT>::addMachinePasses(
       addModulePass(MachineOutlinerPass(Opt.EnableMachineOutliner), PMW);
     }
   }
-
-  derived().addPostBBSections(PMW);
 
   addMachineFunctionPass(StackFrameLayoutAnalysisPass(), PMW);
 
@@ -1142,9 +1164,6 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addTargetRegisterAllocator(
 /// Find and instantiate the register allocation pass requested by this target
 /// at the current optimization level.  Different register allocators are
 /// defined as separate passes because they may require different analysis.
-///
-/// This helper ensures that the -regalloc-npm= option is always available,
-/// even for targets that override the default allocator.
 template <typename Derived, typename TargetMachineT>
 void CodeGenPassBuilder<Derived, TargetMachineT>::addRegAllocPass(
     PassManagerWrapper &PMW, bool Optimized) const {
@@ -1311,3 +1330,4 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addBlockPlacement(
 } // namespace llvm
 
 #endif // LLVM_PASSES_CODEGENPASSBUILDER_H
+ // LLVM_PASSES_CODEGENPASSBUILDER_H
