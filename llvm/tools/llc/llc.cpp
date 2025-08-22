@@ -739,7 +739,13 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     VK = VerifierKind::EachPass;
 
   CodeGenFileType CGFT = codegen::getFileType();
-  if (EnableNewPassManager || !PassPipeline.empty()) {
+  bool RunNewPM = false;
+  if (EnableNewPassManager || !PassPipeline.empty())
+    RunNewPM = true;
+  else if (RunPass.getNumOccurrences())
+    RunNewPM = false;
+
+  if (RunNewPM) {
     return compileModuleWithNewPM(argv[0], std::move(M), std::move(MIR),
                                   std::move(Target), std::move(Out),
                                   std::move(DwoOut), Context, TLII, VK,
