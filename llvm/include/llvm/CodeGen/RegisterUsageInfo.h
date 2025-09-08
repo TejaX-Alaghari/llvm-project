@@ -33,6 +33,8 @@ class TargetMachine;
 
 class PhysicalRegisterUsageInfo {
 public:
+
+  ~PhysicalRegisterUsageInfo();
   /// Set TargetMachine which is used to print analysis.
   void setTargetMachine(const TargetMachine &TM);
 
