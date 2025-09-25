@@ -752,11 +752,13 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   bool RunNewPM = false;
   if (EnableNewPassManager || !PassPipeline.empty())
     RunNewPM = true;
-  else if (RunPass.getNumOccurrences() || HasLegacyPipelineControl)
+  else if (RunPass.getNumOccurrences())
     RunNewPM = false;
-  else if (Target->EnableNewPMForBackend() &&
+  else if (Target->ShouldUseNPMForBackend() &&
            !EnableNewPassManager.getNumOccurrences())
     RunNewPM = true;
+  else if (HasLegacyPipelineControl)
+    RunNewPM = false;
 
   if (RunNewPM) {
     return compileModuleWithNewPM(argv[0], std::move(M), std::move(MIR),
