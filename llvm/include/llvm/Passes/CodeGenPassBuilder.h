@@ -728,9 +728,13 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addIRPasses(
 
   // Run loop strength reduction before anything else.
   if (getOptLevel() != CodeGenOptLevel::None && !Opt.DisableLSR) {
-    // These passes do not use MSSA.
+    // CanonicalizeFreezeInLoops does not preserve Memory SSA, add it
+    // separately via a loop adaptor without MSSA.
+    addFunctionPass(createFunctionToLoopPassAdaptor(
+            CanonicalizeFreezeInLoopsPass(),
+            /*UseMemorySSA=*/false), PMW);
+
     LoopPassManager LPM;
-    LPM.addPass(CanonicalizeFreezeInLoopsPass());
     LPM.addPass(LoopStrengthReducePass());
     if (Opt.EnableLoopTermFold)
       LPM.addPass(LoopTermFoldPass());
