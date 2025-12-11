@@ -2,6 +2,36 @@
 ; RUN: llc -global-isel=0 -mtriple=amdgcn-amd-amdhsa < %s | FileCheck -check-prefixes=GCN,SDAG %s
 ; RUN: llc -global-isel=1 -mtriple=amdgcn-amd-amdhsa < %s | FileCheck -check-prefixes=GCN,GISEL %s
 
+; NOTE: In Legacy PM, this test verified forward-reference handling (callees
+; defined after callers). In NPM, functions are processed in call-graph order,
+; so callees are always processed before callers regardless of IR order.
+
+define hidden i32 @ret_i32_noinline() #0 {
+; GCN-LABEL: ret_i32_noinline:
+; GCN:       ; %bb.0:
+; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
+; GCN-NEXT:    v_mov_b32_e32 v0, 4
+; GCN-NEXT:    s_setpc_b64 s[30:31]
+  ret i32 4
+}
+
+define hidden i32 @ret_i32_alwaysinline() #1 {
+; GCN-LABEL: ret_i32_alwaysinline:
+; GCN:       ; %bb.0:
+; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
+; GCN-NEXT:    v_mov_b32_e32 v0, 4
+; GCN-NEXT:    s_setpc_b64 s[30:31]
+  ret i32 4
+}
+
+define hidden i32 @ident_i32(i32 %i) #0 {
+; GCN-LABEL: ident_i32:
+; GCN:       ; %bb.0:
+; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
+; GCN-NEXT:    s_setpc_b64 s[30:31]
+  ret i32 %i
+}
+
 define amdgpu_kernel void @test_bitcast_return_type_noinline() #0 {
 ; SDAG-LABEL: test_bitcast_return_type_noinline:
 ; SDAG:       ; %bb.0:
@@ -347,35 +377,6 @@ continue:
   %op = fadd float %val, 1.0
   store volatile float %op, ptr addrspace(1) poison
   ret void
-}
-
-; Callees appears last in source file to test that we still lower their
-; arguments before we lower any calls to them.
-
-define hidden i32 @ret_i32_noinline() #0 {
-; GCN-LABEL: ret_i32_noinline:
-; GCN:       ; %bb.0:
-; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GCN-NEXT:    v_mov_b32_e32 v0, 4
-; GCN-NEXT:    s_setpc_b64 s[30:31]
-  ret i32 4
-}
-
-define hidden i32 @ret_i32_alwaysinline() #1 {
-; GCN-LABEL: ret_i32_alwaysinline:
-; GCN:       ; %bb.0:
-; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GCN-NEXT:    v_mov_b32_e32 v0, 4
-; GCN-NEXT:    s_setpc_b64 s[30:31]
-  ret i32 4
-}
-
-define hidden i32 @ident_i32(i32 %i) #0 {
-; GCN-LABEL: ident_i32:
-; GCN:       ; %bb.0:
-; GCN-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GCN-NEXT:    s_setpc_b64 s[30:31]
-  ret i32 %i
 }
 
 declare i32 @llvm.amdgcn.workitem.id.x() #2
