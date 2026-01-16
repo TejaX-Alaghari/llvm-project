@@ -739,11 +739,24 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
     VK = VerifierKind::EachPass;
 
   CodeGenFileType CGFT = codegen::getFileType();
+  auto &RegisteredOptions = cl::getRegisteredOptions();
+  auto OptionUsed = [&](StringRef Name) {
+    auto It = RegisteredOptions.find(Name);
+    return It != RegisteredOptions.end() &&
+           It->second->getNumOccurrences() != 0;
+  };
+  bool HasLegacyPipelineControl =
+      OptionUsed("start-before") || OptionUsed("start-after") ||
+      OptionUsed("stop-before") || OptionUsed("stop-after");
+
   bool RunNewPM = false;
   if (EnableNewPassManager || !PassPipeline.empty())
     RunNewPM = true;
-  else if (RunPass.getNumOccurrences())
+  else if (RunPass.getNumOccurrences() || HasLegacyPipelineControl)
     RunNewPM = false;
+  else if (Target->EnableNewPMForBackend() &&
+           !EnableNewPassManager.getNumOccurrences())
+    RunNewPM = true;
 
   if (RunNewPM) {
     return compileModuleWithNewPM(argv[0], std::move(M), std::move(MIR),

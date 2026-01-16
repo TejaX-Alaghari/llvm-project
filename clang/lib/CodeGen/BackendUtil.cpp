@@ -1238,7 +1238,7 @@ void EmitAssemblyHelper::RunCodegenPipeline(
   // We still use the legacy PM to run the codegen pipeline by default.
   // Targets can opt into the new PM when it is ready.
 
-  if (TM.EnableNewPMForBackend() && CGFT == CodeGenFileType::AssemblyFile) {
+  if (TM.EnableNewPMForBackend()) {
     RunCodegenPipelineWithNewPM(Action, OS, DwoOS, TM);
     return;
   }
