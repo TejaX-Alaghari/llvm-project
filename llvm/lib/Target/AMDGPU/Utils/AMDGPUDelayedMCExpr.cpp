@@ -30,29 +30,33 @@ static msgpack::DocNode getNode(msgpack::DocNode DN, msgpack::Type Type,
 void DelayedMCExprs::assignDocNode(msgpack::DocNode &DN, msgpack::Type Type,
                                    const MCExpr *ExprValue) {
   MCValue Res;
-  if (ExprValue->evaluateAsRelocatable(Res, nullptr)) {
-    if (Res.isAbsolute()) {
-      DN = getNode(DN, Type, Res);
-      return;
-    }
+  if (ExprValue->evaluateAsRelocatable(Res, Assembler) && Res.isAbsolute()) {
+    DN = getNode(DN, Type, Res);
+    return;
   }
 
+  // Use a scalar placeholder to keep YAML emission stable.
+  DN = getNode(DN, Type, MCValue::get(int64_t(0)));
   DelayedExprs.emplace_back(DN, Type, ExprValue);
 }
 
 bool DelayedMCExprs::resolveDelayedExpressions() {
+  bool ResolvedAll = true;
   while (!DelayedExprs.empty()) {
     Expr DE = DelayedExprs.front();
     MCValue Res;
 
-    if (!DE.ExprValue->evaluateAsRelocatable(Res, nullptr) || !Res.isAbsolute())
-      return false;
-
     DelayedExprs.pop_front();
+    if (!DE.ExprValue->evaluateAsRelocatable(Res, Assembler) ||
+        !Res.isAbsolute()) {
+      ResolvedAll = false;
+      Res = MCValue::get(int64_t(0));
+    }
+
     DE.DN = getNode(DE.DN, DE.Type, Res);
   }
 
-  return true;
+  return ResolvedAll;
 }
 
 void DelayedMCExprs::clear() { DelayedExprs.clear(); }

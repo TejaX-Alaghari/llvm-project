@@ -13,6 +13,7 @@
 #include <deque>
 
 namespace llvm {
+class MCAssembler;
 class MCExpr;
 
 class DelayedMCExprs {
@@ -25,8 +26,10 @@ class DelayedMCExprs {
   };
 
   std::deque<Expr> DelayedExprs;
+  MCAssembler *Assembler = nullptr;
 
 public:
+  void setAssembler(MCAssembler *Asm) { Assembler = Asm; }
   bool resolveDelayedExpressions();
   void assignDocNode(msgpack::DocNode &DN, msgpack::Type Type,
                      const MCExpr *ExprValue);

@@ -102,7 +102,7 @@ struct LLVM_EXTERNAL_VISIBILITY SIProgramInfo {
   // However, setting the MCExpr members to their zero value equivalent
   // happens in reset together with (duplicated) value re-set for the
   // non-MCExpr members.
-  void reset(const MachineFunction &MF);
+  void reset(MCContext &Ctx);
 
   // Get function code size and cache the value.
   // If \p IsLowerBound is set it returns a minimal code size which is safe

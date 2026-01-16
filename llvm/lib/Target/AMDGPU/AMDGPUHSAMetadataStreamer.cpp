@@ -553,6 +553,10 @@ MetadataStreamerMsgPackV4::getHSAKernelProps(const MachineFunction &MF,
   return Kern;
 }
 
+void MetadataStreamerMsgPackV4::setAssembler(MCAssembler *Assembler) {
+  DelayedExprs->setAssembler(Assembler);
+}
+
 bool MetadataStreamerMsgPackV4::emitTo(AMDGPUTargetStreamer &TargetStreamer) {
   DelayedExprs->resolveDelayedExpressions();
   return TargetStreamer.EmitHSAMetadata(*HSAMetadataDoc, true);

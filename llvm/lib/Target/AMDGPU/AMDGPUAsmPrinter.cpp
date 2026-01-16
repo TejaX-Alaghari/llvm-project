@@ -208,8 +208,11 @@ void AMDGPUAsmPrinter::emitFunctionBodyStart() {
     getTargetStreamer()->EmitAMDKernelCodeT(KernelCode);
   }
 
-  if (STM.isAmdHsaOS())
+  if (STM.isAmdHsaOS()) {
+    if (MCAssembler *Assembler = OutStreamer->getAssemblerPtr())
+      HSAMetadataStream->setAssembler(Assembler);
     HSAMetadataStream->emitKernel(*MF, CurrentProgramInfo);
+  }
 }
 
 void AMDGPUAsmPrinter::emitFunctionBodyEnd() {
@@ -237,16 +240,41 @@ void AMDGPUAsmPrinter::emitFunctionBodyEnd() {
 
   SmallString<128> KernelName;
   getNameWithPrefix(KernelName, &MF->getFunction());
+  const MCExpr *ZeroExpr = MCConstantExpr::create(0, Context);
+  auto OrZero = [ZeroExpr](const MCExpr *Expr) {
+    return Expr ? Expr : ZeroExpr;
+  };
+
+  auto KernelDescriptor = getAmdhsaKernelDescriptor(*MF, CurrentProgramInfo);
+  KernelDescriptor.group_segment_fixed_size =
+      OrZero(KernelDescriptor.group_segment_fixed_size);
+  KernelDescriptor.private_segment_fixed_size =
+      OrZero(KernelDescriptor.private_segment_fixed_size);
+  KernelDescriptor.kernarg_size = OrZero(KernelDescriptor.kernarg_size);
+  KernelDescriptor.compute_pgm_rsrc3 =
+      OrZero(KernelDescriptor.compute_pgm_rsrc3);
+  KernelDescriptor.compute_pgm_rsrc1 =
+      OrZero(KernelDescriptor.compute_pgm_rsrc1);
+  KernelDescriptor.compute_pgm_rsrc2 =
+      OrZero(KernelDescriptor.compute_pgm_rsrc2);
+  KernelDescriptor.kernel_code_properties =
+      OrZero(KernelDescriptor.kernel_code_properties);
+  KernelDescriptor.kernarg_preload = OrZero(KernelDescriptor.kernarg_preload);
+
+  const MCExpr *NumVGPRsForWavesPerEU =
+      OrZero(CurrentProgramInfo.NumVGPRsForWavesPerEU);
+  const MCExpr *VCCUsed = OrZero(CurrentProgramInfo.VCCUsed);
+  const MCExpr *FlatUsed = OrZero(CurrentProgramInfo.FlatUsed);
+  const MCExpr *NumSGPRsForWavesPerEU =
+      OrZero(CurrentProgramInfo.NumSGPRsForWavesPerEU);
+  const MCExpr *ExtraSGPRs = AMDGPUMCExpr::createExtraSGPRs(
+      VCCUsed, FlatUsed, getTargetStreamer()->getTargetID()->isXnackOnOrAny(),
+      Context);
+
   getTargetStreamer()->EmitAmdhsaKernelDescriptor(
-      STM, KernelName, getAmdhsaKernelDescriptor(*MF, CurrentProgramInfo),
-      CurrentProgramInfo.NumVGPRsForWavesPerEU,
-      MCBinaryExpr::createSub(
-          CurrentProgramInfo.NumSGPRsForWavesPerEU,
-          AMDGPUMCExpr::createExtraSGPRs(
-              CurrentProgramInfo.VCCUsed, CurrentProgramInfo.FlatUsed,
-              getTargetStreamer()->getTargetID()->isXnackOnOrAny(), Context),
-          Context),
-      CurrentProgramInfo.VCCUsed, CurrentProgramInfo.FlatUsed);
+      STM, KernelName, KernelDescriptor, NumVGPRsForWavesPerEU,
+      MCBinaryExpr::createSub(NumSGPRsForWavesPerEU, ExtraSGPRs, Context),
+      VCCUsed, FlatUsed);
 
   Streamer.popSection();
 }
@@ -586,7 +614,7 @@ void AMDGPUAsmPrinter::emitCommonFunctionComments(
 const MCExpr *AMDGPUAsmPrinter::getAmdhsaKernelCodeProperties(
     const MachineFunction &MF) const {
   const SIMachineFunctionInfo &MFI = *MF.getInfo<SIMachineFunctionInfo>();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
   uint16_t KernelCodeProperties = 0;
   const GCNUserSGPRUsageInfo &UserSGPRInfo = MFI.getUserSGPRInfo();
 
@@ -644,7 +672,7 @@ AMDGPUAsmPrinter::getAmdhsaKernelDescriptor(const MachineFunction &MF,
   const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   const Function &F = MF.getFunction();
   const SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   MCKernelDescriptor KernelDescriptor;
 
@@ -686,10 +714,10 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   ResourceUsage = inNewPassManager() ? &MFAM->getResult<AMDGPUResourceUsageAnalysis>(MF)
                                      : &getAnalysis<AMDGPUResourceUsageAnalysisWrapperPass>().getResourceInfo();
 
-  CurrentProgramInfo.reset(MF);
+  CurrentProgramInfo.reset(OutContext);
 
   const AMDGPUMachineFunction *MFI = MF.getInfo<AMDGPUMachineFunction>();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   // The starting address of all shader programs must be 256 bytes aligned.
   // Regular functions just need the basic required instruction alignment.
@@ -926,7 +954,7 @@ void AMDGPUAsmPrinter::emitDVgprSymbol(MachineFunction &MF) {
   const SIMachineFunctionInfo &MFI = *MF.getInfo<SIMachineFunctionInfo>();
   if (MFI.isDynamicVGPREnabled() &&
       MF.getFunction().getCallingConv() == CallingConv::AMDGPU_CS_Chain) {
-    MCContext &Ctx = MF.getContext();
+    MCContext &Ctx = OutContext;
     unsigned BlockSize = MFI.getDynamicVGPRBlockSize();
     MCValue NumVGPRs;
     if (!CurrentProgramInfo.NumVGPRsForWavesPerEU->evaluateAsRelocatable(
@@ -1010,7 +1038,7 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
                                         const MachineFunction &MF) {
   const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   bool IsLocal = MF.getFunction().hasLocalLinkage();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   auto CreateExpr = [&Ctx](int64_t Value) {
     return MCConstantExpr::create(Value, Ctx);
@@ -1358,7 +1386,7 @@ void AMDGPUAsmPrinter::EmitProgramInfoSI(const MachineFunction &MF,
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   unsigned RsrcReg = getRsrcReg(MF.getFunction().getCallingConv());
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   // (((Value) & Mask) << Shift)
   auto SetBits = [&Ctx](const MCExpr *Value, uint32_t Mask, uint32_t Shift) {
@@ -1411,7 +1439,7 @@ void AMDGPUAsmPrinter::EmitProgramInfoSI(const MachineFunction &MF,
     const MCExpr *GPRBlocks = MCBinaryExpr::createOr(
         SetBits(CurrentProgramInfo.VGPRBlocks, /*Mask=*/0x3F, /*Shift=*/0),
         SetBits(CurrentProgramInfo.SGPRBlocks, /*Mask=*/0x0F, /*Shift=*/6),
-        MF.getContext());
+        OutContext);
     EmitResolvedOrExpr(GPRBlocks, /*Size=*/4);
     OutStreamer->emitInt32(R_0286E8_SPI_TMPRING_SIZE);
 
@@ -1487,7 +1515,7 @@ void AMDGPUAsmPrinter::EmitPALMetadata(const MachineFunction &MF,
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   auto CC = MF.getFunction().getCallingConv();
   auto *MD = getTargetStreamer()->getPALMetadata();
-  auto &Ctx = MF.getContext();
+  auto &Ctx = OutContext;
 
   MD->setEntryPoint(CC, MF.getFunction().getName());
   MD->setNumUsedVgprs(CC, CurrentProgramInfo.NumVGPRsForWavesPerEU, Ctx);
@@ -1583,7 +1611,7 @@ void AMDGPUAsmPrinter::emitPALFunctionMetadata(const MachineFunction &MF) {
   StringRef FnName = MF.getFunction().getName();
   MD->setFunctionScratchSize(FnName, MFI.getStackSize());
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   if (MD->getPALMajorVersion() < 3) {
     // Set compute registers
@@ -1627,7 +1655,7 @@ void AMDGPUAsmPrinter::getAmdKernelCode(AMDGPUMCKernelCodeT &Out,
 
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
-  MCContext &Ctx = MF.getContext();
+  MCContext &Ctx = OutContext;
 
   Out.initDefault(&STM, Ctx, /*InitMCExpr=*/false);
 

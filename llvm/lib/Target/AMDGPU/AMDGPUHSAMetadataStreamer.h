@@ -28,6 +28,7 @@ class AMDGPUTargetStreamer;
 class Argument;
 class DataLayout;
 class Function;
+class MCAssembler;
 class MachineFunction;
 class MDNode;
 class Module;
@@ -45,6 +46,8 @@ namespace HSAMD {
 class MetadataStreamer {
 public:
   virtual ~MetadataStreamer() = default;
+
+  virtual void setAssembler(MCAssembler *Assembler) {}
 
   virtual bool emitTo(AMDGPUTargetStreamer &TargetStreamer) = 0;
 
@@ -132,6 +135,8 @@ protected:
 public:
   MetadataStreamerMsgPackV4() = default;
   ~MetadataStreamerMsgPackV4() override = default;
+
+  void setAssembler(MCAssembler *Assembler) override;
 
   bool emitTo(AMDGPUTargetStreamer &TargetStreamer) override;
 

@@ -22,9 +22,7 @@
 
 using namespace llvm;
 
-void SIProgramInfo::reset(const MachineFunction &MF) {
-  MCContext &Ctx = MF.getContext();
-
+void SIProgramInfo::reset(MCContext &Ctx) {
   const MCExpr *ZeroExpr = MCConstantExpr::create(0, Ctx);
 
   CodeSizeInBytes.reset();
