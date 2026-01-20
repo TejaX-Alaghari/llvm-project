@@ -1200,8 +1200,7 @@ GCNTargetMachine::GCNTargetMachine(const Target &T, const Triple &TT,
                                    std::optional<CodeModel::Model> CM,
                                    CodeGenOptLevel OL, bool JIT)
     : AMDGPUTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL) {
-    if (getSelectorType(*this) != SelectorType::GlobalISel &&
-        OL > CodeGenOptLevel::None)
+    if (getSelectorType(*this) != SelectorType::GlobalISel)
         setUseNPMForBackend(true);
    }
 
@@ -2304,8 +2303,6 @@ void AMDGPUCodeGenPassBuilder::addPreISel(PassManagerWrapper &PMW) const {
     addFunctionPass(AMDGPULateCodeGenPreparePass(TM), PMW);
   }
 
-  addFunctionPass(AMDGPUConditionalDiscardPass(), PMW);
-
   // Merge divergent exit nodes. StructurizeCFG won't recognize the multi-exit
   // regions formed by them.
 
@@ -2366,22 +2363,22 @@ void AMDGPUCodeGenPassBuilder::addPreRewrite(PassManagerWrapper &PMW) const {
 }
 
 void AMDGPUCodeGenPassBuilder::addMachineSSAOptimization(
-    AddMachinePass &addPass) const {
-  Base::addMachineSSAOptimization(addPass);
+    PassManagerWrapper &PMW) const {
+  Base::addMachineSSAOptimization(PMW);
 
-  addPass(SIFoldOperandsPass());
+  addMachineFunctionPass(SIFoldOperandsPass(), PMW);
   if (EnableDPPCombine) {
-    addPass(GCNDPPCombinePass());
+    addMachineFunctionPass(GCNDPPCombinePass(), PMW);
   }
-  addPass(SILoadStoreOptimizerPass());
+  addMachineFunctionPass(SILoadStoreOptimizerPass(), PMW);
   if (isPassEnabled(EnableSDWAPeephole)) {
-    addPass(SIPeepholeSDWAPass());
-    addPass(EarlyMachineLICMPass());
-    addPass(MachineCSEPass());
-    addPass(SIFoldOperandsPass());
+    addMachineFunctionPass(SIPeepholeSDWAPass(), PMW);
+    addMachineFunctionPass(EarlyMachineLICMPass(), PMW);
+    addMachineFunctionPass(MachineCSEPass(), PMW);
+    addMachineFunctionPass(SIFoldOperandsPass(), PMW);
   }
-  addPass(DeadMachineInstructionElimPass());
-  addPass(SIShrinkInstructionsPass());
+  addMachineFunctionPass(DeadMachineInstructionElimPass(), PMW);
+  addMachineFunctionPass(SIShrinkInstructionsPass(), PMW);
 }
 
 Error AMDGPUCodeGenPassBuilder::addFastRegAlloc(PassManagerWrapper &PMW) const {
@@ -2431,7 +2428,7 @@ Error AMDGPUCodeGenPassBuilder::addRegAssignmentFast(
   return Error::success();
 }
 
-void AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
+Error AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
     PassManagerWrapper &PMW) const {
   if (EnableDCEInRA)
     insertPass<DetectDeadLanesPass>(DeadMachineInstructionElimPass());
@@ -2467,7 +2464,7 @@ void AMDGPUCodeGenPassBuilder::addOptimizedRegAlloc(
   if (TM.getOptLevel() > CodeGenOptLevel::Less)
     insertPass<MachineSchedulerPass>(SIFormMemoryClausesPass());
 
-  Base::addOptimizedRegAlloc(PMW);
+  return Base::addOptimizedRegAlloc(PMW);
 }
 
 void AMDGPUCodeGenPassBuilder::addPreRegAlloc(PassManagerWrapper &PMW) const {
