@@ -241,6 +241,14 @@ MACHINE_FUNCTION_PASS_WITH_PARAMS(
     [](bool ClearVirtRegs) { return VirtRegRewriterPass(ClearVirtRegs); },
     parseVirtRegRewriterPassOptions, "no-clear-vregs;clear-vregs")
 
+MACHINE_FUNCTION_PASS_WITH_PARAMS(
+    "basic", "RABasicPass",
+    [](RABasicPass::Options Opts) { return RABasicPass(Opts); },
+    [PB = this](StringRef Params) {
+      return parseRegAllocBasicFilterFunc(*PB, Params);
+    },
+    "reg-filter")
+
 #undef MACHINE_FUNCTION_PASS_WITH_PARAMS
 
 // After a pass is converted to new pass manager, its entry should be moved from
@@ -288,7 +296,6 @@ DUMMY_MACHINE_FUNCTION_PASS("machine-function-splitter", MachineFunctionSplitter
 DUMMY_MACHINE_FUNCTION_PASS("machineinstr-printer", MachineFunctionPrinterPass)
 DUMMY_MACHINE_FUNCTION_PASS("mirfs-discriminators", MIRAddFSDiscriminatorsPass)
 DUMMY_MACHINE_FUNCTION_PASS("prologepilog-code", PrologEpilogCodeInserterPass)
-DUMMY_MACHINE_FUNCTION_PASS("ra-basic", RABasicPass)
 DUMMY_MACHINE_FUNCTION_PASS("ra-pbqp", RAPBQPPass)
 DUMMY_MACHINE_FUNCTION_PASS("regalloc", RegAllocPass)
 DUMMY_MACHINE_FUNCTION_PASS("regallocscoringpass", RegAllocScoringPass)

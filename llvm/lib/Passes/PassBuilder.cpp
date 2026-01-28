@@ -149,6 +149,7 @@
 #include "llvm/CodeGen/PreISelIntrinsicLowering.h"
 #include "llvm/CodeGen/ProcessImplicitDefs.h"
 #include "llvm/CodeGen/ReachingDefAnalysis.h"
+#include "llvm/CodeGen/RegAllocBasicPass.h"
 #include "llvm/CodeGen/RegAllocEvictionAdvisor.h"
 #include "llvm/CodeGen/RegAllocFast.h"
 #include "llvm/CodeGen/RegAllocGreedyPass.h"
@@ -1705,6 +1706,20 @@ Expected<bool> parseVirtRegRewriterPassOptions(StringRef Params) {
           inconvertibleErrorCode());
   }
   return ClearVirtRegs;
+}
+
+Expected<RABasicPass::Options>
+parseRegAllocBasicFilterFunc(PassBuilder &PB, StringRef Params) {
+  if (Params.empty() || Params == "all")
+    return RABasicPass::Options();
+
+  std::optional<RegAllocFilterFunc> Filter = PB.parseRegAllocFilter(Params);
+  if (Filter)
+    return RABasicPass::Options{*Filter, Params};
+
+  return make_error<StringError>(
+      formatv("invalid regallocbasic register filter '{}'", Params).str(),
+      inconvertibleErrorCode());
 }
 
 struct FatLTOOptions {

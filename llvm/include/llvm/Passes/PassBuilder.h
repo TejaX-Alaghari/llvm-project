@@ -18,6 +18,8 @@
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/RegAllocCommon.h"
+#include "llvm/CodeGen/RegAllocBasicPass.h"
+#include "llvm/CodeGen/RegAllocGreedyPass.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Support/Compiler.h"
@@ -1000,6 +1002,7 @@ public:
 
 /// Common option used by multiple tools to print pipeline passes
 LLVM_ABI extern cl::opt<bool> PrintPipelinePasses;
+
 }
 
 #endif

@@ -24,7 +24,9 @@
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/RegAllocBasicPass.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/Pass.h"
@@ -38,11 +40,76 @@ using namespace llvm;
 static RegisterRegAlloc basicRegAlloc("basic", "basic register allocator",
                                       createBasicRegisterAllocator);
 
-char RABasic::ID = 0;
+//===----------------------------------------------------------------------===//
+//                         RequiredAnalyses
+//===----------------------------------------------------------------------===//
 
-char &llvm::RABasicID = RABasic::ID;
+struct RABasic::RequiredAnalyses {
+  VirtRegMap *VRM = nullptr;
+  LiveIntervals *LIS = nullptr;
+  LiveRegMatrix *LRM = nullptr;
+  LiveStacks *LSS = nullptr;
+  MachineBlockFrequencyInfo *MBFI = nullptr;
+  MachineDominatorTree *DomTree = nullptr;
+  MachineLoopInfo *Loops = nullptr;
+  ProfileSummaryInfo *PSI = nullptr;
 
-INITIALIZE_PASS_BEGIN(RABasic, "regallocbasic", "Basic Register Allocator",
+  RequiredAnalyses() = delete;
+  RequiredAnalyses(Pass &P);
+  RequiredAnalyses(MachineFunction &MF, MachineFunctionAnalysisManager &MFAM);
+};
+
+RABasic::RequiredAnalyses::RequiredAnalyses(Pass &P) {
+  VRM = &P.getAnalysis<VirtRegMapWrapperLegacy>().getVRM();
+  LIS = &P.getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  LRM = &P.getAnalysis<LiveRegMatrixWrapperLegacy>().getLRM();
+  LSS = &P.getAnalysis<LiveStacksWrapperLegacy>().getLS();
+  MBFI = &P.getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
+  DomTree = &P.getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
+  Loops = &P.getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  PSI = &P.getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI();
+}
+
+RABasic::RequiredAnalyses::RequiredAnalyses(
+    MachineFunction &MF, MachineFunctionAnalysisManager &MFAM) {
+  VRM = &MFAM.getResult<VirtRegMapAnalysis>(MF);
+  LIS = &MFAM.getResult<LiveIntervalsAnalysis>(MF);
+  LRM = &MFAM.getResult<LiveRegMatrixAnalysis>(MF);
+  LSS = &MFAM.getResult<LiveStacksAnalysis>(MF);
+  MBFI = &MFAM.getResult<MachineBlockFrequencyAnalysis>(MF);
+  DomTree = &MFAM.getResult<MachineDominatorTreeAnalysis>(MF);
+  Loops = &MFAM.getResult<MachineLoopAnalysis>(MF);
+  // PSI is optional for the basic allocator - it's only used for spill weight
+  // calculation hints. In NPM, accessing module-level analyses is complex,
+  // so we just pass nullptr.
+  PSI = nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+//                         RABasic Implementation
+//===----------------------------------------------------------------------===//
+
+RABasic::RABasic(RequiredAnalyses &Analyses, const RegAllocFilterFunc F)
+    : RegAllocBase(F) {
+  VRM = Analyses.VRM;
+  LIS = Analyses.LIS;
+  Matrix = Analyses.LRM;
+  LSS = Analyses.LSS;
+  MBFI = Analyses.MBFI;
+  DomTree = Analyses.DomTree;
+  Loops = Analyses.Loops;
+  PSI = Analyses.PSI;
+}
+
+//===----------------------------------------------------------------------===//
+//                         RABasicLegacy (Legacy Pass)
+//===----------------------------------------------------------------------===//
+
+char RABasicLegacy::ID = 0;
+
+char &llvm::RABasicID = RABasicLegacy::ID;
+
+INITIALIZE_PASS_BEGIN(RABasicLegacy, "regallocbasic", "Basic Register Allocator",
                       false, false)
 INITIALIZE_PASS_DEPENDENCY(LiveDebugVariablesWrapperLegacy)
 INITIALIZE_PASS_DEPENDENCY(SlotIndexesWrapperPass)
@@ -56,8 +123,47 @@ INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(VirtRegMapWrapperLegacy)
 INITIALIZE_PASS_DEPENDENCY(LiveRegMatrixWrapperLegacy)
 INITIALIZE_PASS_DEPENDENCY(ProfileSummaryInfoWrapperPass)
-INITIALIZE_PASS_END(RABasic, "regallocbasic", "Basic Register Allocator", false,
+INITIALIZE_PASS_END(RABasicLegacy, "regallocbasic", "Basic Register Allocator", false,
                     false)
+
+RABasicLegacy::RABasicLegacy(const RegAllocFilterFunc F)
+    : MachineFunctionPass(ID), F(F) {}
+
+void RABasicLegacy::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesCFG();
+  AU.addRequired<AAResultsWrapperPass>();
+  AU.addPreserved<AAResultsWrapperPass>();
+  AU.addRequired<LiveIntervalsWrapperPass>();
+  AU.addPreserved<LiveIntervalsWrapperPass>();
+  AU.addPreserved<SlotIndexesWrapperPass>();
+  AU.addRequired<LiveDebugVariablesWrapperLegacy>();
+  AU.addPreserved<LiveDebugVariablesWrapperLegacy>();
+  AU.addRequired<LiveStacksWrapperLegacy>();
+  AU.addPreserved<LiveStacksWrapperLegacy>();
+  AU.addRequired<ProfileSummaryInfoWrapperPass>();
+  AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
+  AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
+  AU.addRequired<MachineDominatorTreeWrapperPass>();
+  AU.addRequiredID(MachineDominatorsID);
+  AU.addPreservedID(MachineDominatorsID);
+  AU.addRequired<MachineLoopInfoWrapperPass>();
+  AU.addPreserved<MachineLoopInfoWrapperPass>();
+  AU.addRequired<VirtRegMapWrapperLegacy>();
+  AU.addPreserved<VirtRegMapWrapperLegacy>();
+  AU.addRequired<LiveRegMatrixWrapperLegacy>();
+  AU.addPreserved<LiveRegMatrixWrapperLegacy>();
+  MachineFunctionPass::getAnalysisUsage(AU);
+}
+
+bool RABasicLegacy::runOnMachineFunction(MachineFunction &MF) {
+  RABasic::RequiredAnalyses Analyses(*this);
+  RABasic Impl(Analyses, F);
+  return Impl.run(MF);
+}
+
+//===----------------------------------------------------------------------===//
+//                         RABasic Methods
+//===----------------------------------------------------------------------===//
 
 bool RABasic::LRE_CanEraseVirtReg(Register VirtReg) {
   LiveInterval &LI = LIS->getInterval(VirtReg);
@@ -82,35 +188,6 @@ void RABasic::LRE_WillShrinkVirtReg(Register VirtReg) {
   LiveInterval &LI = LIS->getInterval(VirtReg);
   Matrix->unassign(LI);
   enqueue(&LI);
-}
-
-RABasic::RABasic(RegAllocFilterFunc F)
-    : MachineFunctionPass(ID), RegAllocBase(F) {}
-
-void RABasic::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.setPreservesCFG();
-  AU.addRequired<AAResultsWrapperPass>();
-  AU.addPreserved<AAResultsWrapperPass>();
-  AU.addRequired<LiveIntervalsWrapperPass>();
-  AU.addPreserved<LiveIntervalsWrapperPass>();
-  AU.addPreserved<SlotIndexesWrapperPass>();
-  AU.addRequired<LiveDebugVariablesWrapperLegacy>();
-  AU.addPreserved<LiveDebugVariablesWrapperLegacy>();
-  AU.addRequired<LiveStacksWrapperLegacy>();
-  AU.addPreserved<LiveStacksWrapperLegacy>();
-  AU.addRequired<ProfileSummaryInfoWrapperPass>();
-  AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
-  AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
-  AU.addRequired<MachineDominatorTreeWrapperPass>();
-  AU.addRequiredID(MachineDominatorsID);
-  AU.addPreservedID(MachineDominatorsID);
-  AU.addRequired<MachineLoopInfoWrapperPass>();
-  AU.addPreserved<MachineLoopInfoWrapperPass>();
-  AU.addRequired<VirtRegMapWrapperLegacy>();
-  AU.addPreserved<VirtRegMapWrapperLegacy>();
-  AU.addRequired<LiveRegMatrixWrapperLegacy>();
-  AU.addPreserved<LiveRegMatrixWrapperLegacy>();
-  MachineFunctionPass::getAnalysisUsage(AU);
 }
 
 void RABasic::releaseMemory() {
@@ -220,25 +297,18 @@ MCRegister RABasic::selectOrSplit(const LiveInterval &VirtReg,
   return 0;
 }
 
-bool RABasic::runOnMachineFunction(MachineFunction &mf) {
+bool RABasic::run(MachineFunction &mf) {
   LLVM_DEBUG(dbgs() << "********** BASIC REGISTER ALLOCATION **********\n"
                     << "********** Function: " << mf.getName() << '\n');
 
   MF = &mf;
-  auto &MBFI = getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
-  auto &LiveStks = getAnalysis<LiveStacksWrapperLegacy>().getLS();
-  auto &MDT = getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
-  RegAllocBase::init(getAnalysis<VirtRegMapWrapperLegacy>().getVRM(),
-                     getAnalysis<LiveIntervalsWrapperPass>().getLIS(),
-                     getAnalysis<LiveRegMatrixWrapperLegacy>().getLRM());
-  VirtRegAuxInfo VRAI(*MF, *LIS, *VRM,
-                      getAnalysis<MachineLoopInfoWrapperPass>().getLI(), MBFI,
-                      &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI());
+  RegAllocBase::init(*VRM, *LIS, *Matrix);
+  VirtRegAuxInfo VRAI(*MF, *LIS, *VRM, *Loops, *MBFI, PSI);
   VRAI.calculateSpillWeightsAndHints();
 
   SpillerInstance.reset(
-      createInlineSpiller({*LIS, LiveStks, MDT, MBFI}, *MF, *VRM, VRAI));
+      createInlineSpiller({*LIS, *LSS, *DomTree, *MBFI}, *MF, *VRM, VRAI));
 
   allocatePhysRegs();
   postOptimization();
@@ -250,10 +320,47 @@ bool RABasic::runOnMachineFunction(MachineFunction &mf) {
   return true;
 }
 
+//===----------------------------------------------------------------------===//
+//                         RABasicPass (New PM)
+//===----------------------------------------------------------------------===//
+
+PreservedAnalyses RABasicPass::run(MachineFunction &MF,
+                                   MachineFunctionAnalysisManager &MFAM) {
+  MFPropsModifier _(*this, MF);
+
+  RABasic::RequiredAnalyses Analyses(MF, MFAM);
+  RABasic Impl(Analyses, Opts.Filter);
+
+  bool Changed = Impl.run(MF);
+  if (!Changed)
+    return PreservedAnalyses::all();
+
+  auto PA = getMachineFunctionPassPreservedAnalyses();
+  PA.preserveSet<CFGAnalyses>();
+  PA.preserve<MachineBlockFrequencyAnalysis>();
+  PA.preserve<LiveIntervalsAnalysis>();
+  PA.preserve<SlotIndexesAnalysis>();
+  PA.preserve<LiveDebugVariablesAnalysis>();
+  PA.preserve<LiveStacksAnalysis>();
+  PA.preserve<VirtRegMapAnalysis>();
+  PA.preserve<LiveRegMatrixAnalysis>();
+  return PA;
+}
+
+void RABasicPass::printPipeline(
+    raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) const {
+  StringRef FilterName = Opts.FilterName.empty() ? "all" : Opts.FilterName;
+  OS << "basic<" << FilterName << '>';
+}
+
+//===----------------------------------------------------------------------===//
+//                         Factory Functions
+//===----------------------------------------------------------------------===//
+
 FunctionPass* llvm::createBasicRegisterAllocator() {
-  return new RABasic();
+  return new RABasicLegacy();
 }
 
 FunctionPass *llvm::createBasicRegisterAllocator(RegAllocFilterFunc F) {
-  return new RABasic(F);
+  return new RABasicLegacy(F);
 }

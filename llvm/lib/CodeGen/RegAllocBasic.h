@@ -24,6 +24,15 @@
 
 namespace llvm {
 
+class LiveIntervals;
+class LiveRegMatrix;
+class LiveStacks;
+class MachineBlockFrequencyInfo;
+class MachineDominatorTree;
+class MachineLoopInfo;
+class ProfileSummaryInfo;
+class VirtRegMap;
+
 struct CompSpillWeight {
   bool operator()(const LiveInterval *A, const LiveInterval *B) const {
     // Compare by weight first, then use register number as a stable tie-breaker
@@ -38,11 +47,21 @@ struct CompSpillWeight {
 /// whenever a register is unavailable. This is not practical in production but
 /// provides a useful baseline both for measuring other allocators and comparing
 /// the speed of the basic algorithm against other styles of allocators.
-class LLVM_LIBRARY_VISIBILITY RABasic : public MachineFunctionPass,
-                                        public RegAllocBase,
+class LLVM_LIBRARY_VISIBILITY RABasic : public RegAllocBase,
                                         private LiveRangeEdit::Delegate {
+public:
+  struct RequiredAnalyses;
+
+private:
   // context
   MachineFunction *MF = nullptr;
+
+  // analyses
+  LiveStacks *LSS = nullptr;
+  MachineBlockFrequencyInfo *MBFI = nullptr;
+  MachineDominatorTree *DomTree = nullptr;
+  MachineLoopInfo *Loops = nullptr;
+  ProfileSummaryInfo *PSI = nullptr;
 
   // state
   std::unique_ptr<Spiller> SpillerInstance;
@@ -58,15 +77,7 @@ class LLVM_LIBRARY_VISIBILITY RABasic : public MachineFunctionPass,
   void LRE_WillShrinkVirtReg(Register) override;
 
 public:
-  RABasic(const RegAllocFilterFunc F = nullptr);
-
-  /// Return the pass name.
-  StringRef getPassName() const override { return "Basic Register Allocator"; }
-
-  /// RABasic analysis usage.
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  void releaseMemory() override;
+  RABasic(RequiredAnalyses &Analyses, const RegAllocFilterFunc F = nullptr);
 
   Spiller &spiller() override { return *SpillerInstance; }
 
@@ -84,7 +95,31 @@ public:
                            SmallVectorImpl<Register> &SplitVRegs) override;
 
   /// Perform register allocation.
-  bool runOnMachineFunction(MachineFunction &mf) override;
+  bool run(MachineFunction &mf);
+
+  void releaseMemory();
+
+  // Helper for spilling all live virtual registers currently unified under preg
+  // that interfere with the most recently queried lvr.  Return true if spilling
+  // was successful, and append any new spilled/split intervals to splitLVRs.
+  bool spillInterferences(const LiveInterval &VirtReg, MCRegister PhysReg,
+                          SmallVectorImpl<Register> &SplitVRegs);
+};
+
+/// Legacy pass wrapper for RABasic.
+class LLVM_LIBRARY_VISIBILITY RABasicLegacy : public MachineFunctionPass {
+  RegAllocFilterFunc F;
+
+public:
+  static char ID;
+
+  RABasicLegacy(const RegAllocFilterFunc F = nullptr);
+
+  StringRef getPassName() const override { return "Basic Register Allocator"; }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+  bool runOnMachineFunction(MachineFunction &MF) override;
 
   MachineFunctionProperties getRequiredProperties() const override {
     return MachineFunctionProperties().set(
@@ -95,14 +130,7 @@ public:
     return MachineFunctionProperties().set(
         MachineFunctionProperties::Property::IsSSA);
   }
-
-  // Helper for spilling all live virtual registers currently unified under preg
-  // that interfere with the most recently queried lvr.  Return true if spilling
-  // was successful, and append any new spilled/split intervals to splitLVRs.
-  bool spillInterferences(const LiveInterval &VirtReg, MCRegister PhysReg,
-                          SmallVectorImpl<Register> &SplitVRegs);
-
-  static char ID;
 };
+
 } // namespace llvm
 #endif
