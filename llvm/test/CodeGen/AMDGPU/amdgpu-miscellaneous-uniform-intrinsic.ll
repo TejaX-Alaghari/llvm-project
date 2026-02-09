@@ -83,8 +83,10 @@ define amdgpu_kernel void @permlane64_uniform(ptr addrspace(1) %out, i32 %src) {
 ; CHECK-NEXT:    s_load_b32 s2, s[4:5], 0x8
 ; CHECK-NEXT:    s_load_b64 s[0:1], s[4:5], 0x0
 ; CHECK-NEXT:    s_waitcnt lgkmcnt(0)
-; CHECK-NEXT:    v_dual_mov_b32 v0, 0 :: v_dual_mov_b32 v1, s2
-; CHECK-NEXT:    global_store_b32 v0, v1, s[0:1]
+; CHECK-NEXT:    v_dual_mov_b32 v1, 0 :: v_dual_mov_b32 v0, s2
+; CHECK-NEXT:    s_delay_alu instid0(VALU_DEP_1)
+; CHECK-NEXT:    v_permlane64_b32 v0, v0
+; CHECK-NEXT:    global_store_b32 v1, v0, s[0:1]
 ; CHECK-NEXT:    s_endpgm
   %v = call i32 @llvm.amdgcn.permlane64(i32 %src)
   store i32 %v, ptr addrspace(1) %out
@@ -134,6 +136,7 @@ define protected amdgpu_kernel void @trivial_waterfall_eq_zero(ptr addrspace(1) 
 ; CHECK:       ; %bb.0: ; %entry
 ; CHECK-NEXT:    s_load_b64 s[0:1], s[4:5], 0x0
 ; CHECK-NEXT:    v_dual_mov_b32 v0, 0 :: v_dual_mov_b32 v1, 5
+; CHECK-NEXT:    s_mov_b32 s3, 0
 ; CHECK-NEXT:    s_mov_b32 s2, 0
 ; CHECK-NEXT:    s_branch .LBB7_2
 ; CHECK-NEXT:  .LBB7_1: ; %Flow
@@ -143,9 +146,13 @@ define protected amdgpu_kernel void @trivial_waterfall_eq_zero(ptr addrspace(1) 
 ; CHECK-NEXT:    s_cbranch_vccz .LBB7_4
 ; CHECK-NEXT:  .LBB7_2: ; %while
 ; CHECK-NEXT:    ; =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    s_and_b32 vcc_lo, exec_lo, s2
+; CHECK-NEXT:    s_xor_b32 s2, s2, -1
+; CHECK-NEXT:    s_delay_alu instid0(SALU_CYCLE_1) | instskip(NEXT) | instid1(VALU_DEP_1)
+; CHECK-NEXT:    v_cndmask_b32_e64 v2, 0, 1, s2
+; CHECK-NEXT:    v_cmp_ne_u32_e64 s2, 0, v2
+; CHECK-NEXT:    s_cmp_eq_u64 s[2:3], 0
 ; CHECK-NEXT:    s_mov_b32 s2, -1
-; CHECK-NEXT:    s_cbranch_vccnz .LBB7_1
+; CHECK-NEXT:    s_cbranch_scc1 .LBB7_1
 ; CHECK-NEXT:  ; %bb.3: ; %if
 ; CHECK-NEXT:    ; in Loop: Header=BB7_2 Depth=1
 ; CHECK-NEXT:    s_mov_b32 s2, 0

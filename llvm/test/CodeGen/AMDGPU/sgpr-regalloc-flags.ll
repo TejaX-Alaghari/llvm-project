@@ -1,21 +1,19 @@
 ; REQUIRES: asserts
 
 ; RUN: llc -verify-machineinstrs=0 -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=DEFAULT %s
-; RUN: llc -verify-machineinstrs=0 -sgpr-regalloc=greedy -wwm-regalloc=greedy -vgpr-regalloc=greedy -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=DEFAULT %s
+; RUN: llc -verify-machineinstrs=0 -sgpr-regalloc-npm=greedy -wwm-regalloc-npm=greedy -vgpr-regalloc-npm=greedy -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=DEFAULT %s
 
 ; RUN: llc -verify-machineinstrs=0 -O0 -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=O0 %s
-
-; RUN: llc -verify-machineinstrs=0 -regalloc-npm=basic -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=ALL-BASIC %s
 
 ; Legacy PM tests for AMDGPU-specific register allocator flags (not yet ported to NPM)
 ; RUN: llc -enable-new-pm=0 -verify-machineinstrs=0 -wwm-regalloc=basic -vgpr-regalloc=basic -mtriple=amdgcn-amd-amdhsa -debug-pass=Structure -filetype=null %s 2>&1 | FileCheck -check-prefix=DEFAULT-BASIC %s
 ; RUN: llc -enable-new-pm=0 -verify-machineinstrs=0 -sgpr-regalloc=basic -mtriple=amdgcn-amd-amdhsa -debug-pass=Structure -filetype=null %s 2>&1 | FileCheck -check-prefix=BASIC-DEFAULT %s
 ; RUN: llc -enable-new-pm=0 -verify-machineinstrs=0 -sgpr-regalloc=basic -wwm-regalloc=basic -vgpr-regalloc=basic -mtriple=amdgcn-amd-amdhsa -debug-pass=Structure -filetype=null %s 2>&1 | FileCheck -check-prefix=BASIC-BASIC %s
 
-; RUN: not llc -enable-new-pm=0 -verify-machineinstrs=0 -regalloc=basic -mtriple=amdgcn-amd-amdhsa -debug-pass=Structure -filetype=null %s 2>&1 | FileCheck -check-prefix=REGALLOC %s
-; RUN: not llc -enable-new-pm=0 -verify-machineinstrs=0 -regalloc=fast -O0 -mtriple=amdgcn-amd-amdhsa -debug-pass=Structure -filetype=null %s 2>&1 | FileCheck -check-prefix=REGALLOC %s
+; RUN: not llc -verify-machineinstrs=0 -regalloc-npm=basic -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=REGALLOC %s
+; RUN: not llc -verify-machineinstrs=0 -regalloc-npm=fast -O0 -mtriple=amdgcn-amd-amdhsa -debug-pass-manager -filetype=null %s 2>&1 | FileCheck -check-prefix=REGALLOC %s
 
-; REGALLOC: -regalloc not supported with amdgcn. Use -sgpr-regalloc, -wwm-regalloc, and -vgpr-regalloc
+; REGALLOC: -regalloc-npm not supported for amdgcn. Use -sgpr-regalloc-npm, -vgpr-regalloc-npm, and -wwm-regalloc-npm
 
 ; DEFAULT: Running pass: RAGreedyPass on foo
 ; DEFAULT: Running pass: VirtRegRewriterPass on foo
@@ -41,10 +39,6 @@
 ; O0: Running pass: AMDGPUReserveWWMRegsPass on foo
 ; O0: Running pass: RegAllocFastPass on foo
 ; O0: Running pass: SIFixVGPRCopiesPass on foo
-
-; ALL-BASIC: Running pass: RABasicPass on foo
-; ALL-BASIC: Running pass: VirtRegRewriterPass on foo
-; ALL-BASIC: Running pass: StackSlotColoringPass on foo
 
 
 
